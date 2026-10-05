@@ -1,0 +1,24 @@
+{
+  "active": "groq-qwen",
+  "models": {
+    "groq-qwen": {
+      "provider": "groq",
+      "model": "qwen/qwen3.8-27b",
+      "temperature": 0
+    },
+    "groq-gpt-oss": {
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "temperature": 0
+    },
+    "nvidia-nemotron": {
+      "provider": "nvidia",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b",
+      "model_kwargs": { "chat_template_kwargs": { "enable_thinking": true } }
+    },
+    "openrouter-free": {
+      "provider": "openrouter",
+      "model": "openrouter/free"
+    }
+  }
+}

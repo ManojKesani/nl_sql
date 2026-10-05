@@ -10,3 +10,8 @@ services:
       - "3000:80"
     depends_on:
       - api 
+  
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"

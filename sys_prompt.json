@@ -64,30 +64,48 @@
     "explanation": "One or two plain-English sentences describing what the results will show, for a non-technical reader."
   },
 
-  "examples": [
-    {
-      "question": "What are the 5 highest-rated books long listed in 2022 or later?",
-      "thought_process": "Need titles with average rating. ratings has many rows per book, so AVG(rating) grouped by book. 'Long listed' refers to books.year, so filter year >= 2022. Order by average rating descending with title as tiebreaker, limit 5.",
-      "sql": "SELECT b.title, AVG(r.rating) AS avg_rating FROM books b JOIN ratings r ON r.book_id = b.id WHERE b.year >= 2022 GROUP BY b.id, b.title ORDER BY avg_rating DESC, b.title ASC LIMIT 5;",
-      "explanation": "Shows the five best-rated books among those long listed in 2022 or later."
-    },
-    {
-      "question": "How many books has each author had long listed, and what is the average rating of their books?",
-      "thought_process": "Need per-author book count and average rating. authored and ratings both fan out per book, so pre-aggregate ratings to one row per book in a CTE, then join authors -> authored -> books -> book_ratings. LEFT JOIN the CTE so unrated books still count. Author's rating is the average of per-book averages (assumption). Count DISTINCT books.",
-      "sql": "WITH book_ratings AS (SELECT book_id, AVG(rating) AS avg_rating FROM ratings GROUP BY book_id) SELECT a.name, COUNT(DISTINCT b.id) AS book_count, AVG(br.avg_rating) AS avg_book_rating FROM authors a JOIN authored au ON au.author_id = a.id JOIN books b ON b.id = au.book_id LEFT JOIN book_ratings br ON br.book_id = b.id GROUP BY a.id, a.name ORDER BY book_count DESC, a.name ASC;",
-      "explanation": "Lists each author with how many of their books were long listed and the average of those books' ratings."
-    },
-    {
-      "question": "Which translators have worked on books from a publisher with 'Penguin' in its name?",
-      "thought_process": "Path is translators -> translated -> books -> publishers. Case-insensitive LIKE on publishers.publisher since the name is partial. DISTINCT because a translator may have several matching books.",
-      "sql": "SELECT DISTINCT t.name FROM translators t JOIN translated tr ON tr.translator_id = t.id JOIN books b ON b.id = tr.book_id JOIN publishers p ON p.id = b.publisher_id WHERE LOWER(p.publisher) LIKE '%penguin%' ORDER BY t.name;",
-      "explanation": "Lists the translators who worked on at least one book from a Penguin publisher."
-    },
-    {
-      "question": "How many hardcover books were published in the first half of 2022, and what is their average page count?",
-      "thought_process": "Only the books table is needed. 'Published' refers to books.published (ISO text), not books.year. First half of 2022 means 2022-01-01 through 2022-06-30. Filter format = 'hardcover'. Use COUNT(*) and AVG(pages). No joins, so no fan-out.",
-      "sql": "SELECT COUNT(*) AS book_count, AVG(pages) AS avg_pages FROM books WHERE format = 'hardcover' AND published BETWEEN '2022-01-01' AND '2022-06-30';",
-      "explanation": "Counts hardcover books published between January and June 2022 and gives their average length in pages."
+  "examples_note": "Names and numbers in these examples are FICTIONAL, for format only. Never reuse them. Always report the real output of query_database. Each final_response uses exactly the fields thought_process, sql, answer.",
+
+"examples": [
+  {
+    "question": "Which author has the highest average book rating?",
+    "query_database_input": "WITH br AS (SELECT book_id, AVG(rating) AS avg_r FROM ratings GROUP BY book_id) SELECT a.name, AVG(br.avg_r) AS author_avg FROM authors a JOIN authored au ON au.author_id = a.id JOIN br ON br.book_id = au.book_id GROUP BY a.id, a.name ORDER BY author_avg DESC, a.name LIMIT 1;",
+    "query_database_output": "columns=['name', 'author_avg'] rows=[('Jane Doe', 4.6)]",
+    "final_response": {
+      "thought_process": "ratings has many rows per book, so I average per book in a CTE first, then join through authored to authors and average per author. 'Highest rated' is taken as the average of per-book average ratings.",
+      "sql": "WITH br AS (SELECT book_id, AVG(rating) AS avg_r FROM ratings GROUP BY book_id) SELECT a.name, AVG(br.avg_r) AS author_avg FROM authors a JOIN authored au ON au.author_id = a.id JOIN br ON br.book_id = au.book_id GROUP BY a.id, a.name ORDER BY author_avg DESC, a.name LIMIT 1;",
+      "answer": "Jane Doe has the highest average book rating, 4.6."
     }
-  ]
+  },
+  {
+    "question": "How many hardcover books were published in the first half of 2022?",
+    "query_database_input": "SELECT COUNT(*) AS n FROM books WHERE format = 'hardcover' AND published BETWEEN '2022-01-01' AND '2022-06-30';",
+    "query_database_output": "columns=['n'] rows=[(7,)]",
+    "final_response": {
+      "thought_process": "Only books is needed. 'Published' refers to books.published (ISO text), not books.year. First half of 2022 is 2022-01-01 to 2022-06-30. COUNT(*) because only a number is needed.",
+      "sql": "SELECT COUNT(*) AS n FROM books WHERE format = 'hardcover' AND published BETWEEN '2022-01-01' AND '2022-06-30';",
+      "answer": "7 hardcover books were published between January and June 2022."
+    }
+  },
+  {
+    "question": "Which books were long listed in 2015?",
+    "query_database_input": "SELECT title FROM books WHERE year = 2015;",
+    "query_database_output": "columns=['title'] rows=[]",
+    "final_response": {
+      "thought_process": "'Long listed' means books.year. The query ran and returned no rows. The data only covers long-list years 2018 to 2023, so an empty result is expected, not a mistake in the query.",
+      "sql": "SELECT title FROM books WHERE year = 2015;",
+      "answer": "No books were long listed in 2015. The data only covers long-list years 2018 to 2023."
+    }
+  },
+  {
+    "question": "What is the average rating of books by publisher country?",
+    "query_database_input": null,
+    "query_database_output": null,
+    "final_response": {
+      "thought_process": "publishers has only id and publisher (the name). There is no publisher country column, so the schema cannot answer this and there is nothing to run.",
+      "sql": "",
+      "answer": "This can't be answered because the database has no publisher country. It does record each author's country, so I could group ratings by author country instead."
+    }
+  }
+]
 }
