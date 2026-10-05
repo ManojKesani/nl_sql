@@ -1,5 +1,0 @@
-{
-    "thought_process": "The query needs to list books whose publisher is 'Yale University Press'. This requires joining the books table with the publishers table on publisher_id. A simple equality filter on the publisher name is sufficient. No other tables are needed.",
-    "sql": "SELECT b.id, b.title, b.year, b.published FROM books b JOIN publishers p ON b.publisher_id = p.id WHERE p.publisher = 'Yale University Press';",
-    "explanation": "Shows all books that were published by Yale University Press, including their ID, title, long\u2011list year, and publication date."
-}

@@ -11,7 +11,16 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain.tools import tool
 from pydantic import BaseModel, Field
 
+from openinference.instrumentation.langchain import LangChainInstrumentor
+from phoenix.otel import register
+
 load_dotenv()
+# Phoenix tracing
+tracer_provider = register(
+    project_name="nl-sql",
+    endpoint="http://phoenix:6006/v1/traces",   # service name from docker-compose
+)
+LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
 
 DB_FILE = "longlist.db"
 
