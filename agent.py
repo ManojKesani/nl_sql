@@ -12,6 +12,7 @@ from langchain_openrouter import ChatOpenRouter
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 from fastapi import FastAPI,HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import sqlite3 
 
 load_dotenv()
@@ -86,6 +87,12 @@ agent = create_agent(
 # print("\nResult successfully saved to output.json")
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
+)
 
 @app.post("/ask")
 def ask(body : Question):

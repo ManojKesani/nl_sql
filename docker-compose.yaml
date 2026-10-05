@@ -1,0 +1,12 @@
+services:
+  api:
+    build: .
+    env_file: .env
+
+
+  web:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - api 
