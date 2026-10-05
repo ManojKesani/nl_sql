@@ -19,11 +19,13 @@
 -- SELECT MIN(year), MAX(year) FROM books;
 -- SELECT COUNT(*) FROM books WHERE published IS NULL OR published = '';
 -- SELECT b.* FROM books b JOIN publishers p ON p.id = b.publisher_id WHERE p.publisher = 'Yale University Press';
-SELECT AVG(r.rating) AS average_rating FROM books b JOIN ratings r ON 
-        r.book_id = b.id WHERE LOWER(b.title) = 'the years';
-SELECT AVG(ratings.rating) AS average_rating
-FROM books
-JOIN ratings ON ratings.book_id = books.id
-WHERE books.title = 'The Years';
+-- SELECT AVG(r.rating) AS average_rating FROM books b JOIN ratings r ON 
+--         r.book_id = b.id WHERE LOWER(b.title) = 'the years';
+-- SELECT AVG(ratings.rating) AS average_rating
+-- FROM books
+-- JOIN ratings ON ratings.book_id = books.id
+-- WHERE books.title = 'The Years';
 
-SELECT AVG(r.rating) AS avg_rating FROM books b JOIN ratings r ON r.book_id = b.id WHERE b.title = 'The Years';
+-- SELECT AVG(r.rating) AS avg_rating FROM books b JOIN ratings r ON r.book_id = b.id WHERE b.title = 'The Years';
+SELECT b.id, b.title, b.isbn, b.published FROM books b JOIN publishers p ON p.id = b.publisher_id WHERE p.publisher = 'Yale University Press' ORDER BY b.title;
+SELECT COUNT(*) AS hardcover_count FROM books WHERE format = 'hardcover';
