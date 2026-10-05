@@ -1,3 +1,7 @@
+![alt text](<Screenshot 2026-10-06 at 03-08-30 nl-sql - Projects.png>)
+![alt text](<Screenshot 2026-10-06 at 03-08-54 The Longlist Library.png>)
+
+
 # nl-sql: Ask the Books Database
 
 A natural-language-to-SQL app. Type a question in plain English (e.g. *"Which books did Yale University Press publish?"*), and an LLM agent writes a read-only SQLite query, runs it against the `longlist.db` books database, and returns a structured answer: the reasoning, the SQL, and a plain-English result.

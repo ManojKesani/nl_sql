@@ -1,27 +1,425 @@
 <!DOCTYPE html>
-<html>
-<body>
-  <h2>Ask the books database</h2>
-  <input id="q" size="60" placeholder="Which books did Yale University Press publish?">
-  <button onclick="ask()">Ask</button>
-  <pre id="out"></pre>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Longlist Library</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,700;1,400&family=Caveat:wght@600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --night: #241a3a;
+    --night-deep: #171028;
+    --ink: #1c1330;
+    --candle: #f2c14e;
+    --paper: #fbeec9;
+    --teal: #2f8f83;
+    --tomato: #d1495b;
+    --mustard: #edae49;
+    --plum: #6a4c93;
+    --moss: #5a8f4a;
+    --wood: #7a4a26;
+    --serif: Fraunces, Georgia, "Times New Roman", serif;
+    --hand: Caveat, "Comic Sans MS", cursive;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    padding: 1.5rem 1rem 4rem;
+    font: 1.1rem/1.6 var(--serif);
+    color: var(--ink);
+    background:
+      radial-gradient(ellipse at 50% -10%, rgba(242,193,78,.4), transparent 50%),
+      linear-gradient(var(--night), var(--night-deep));
+    background-attachment: fixed;
+  }
+  /* twinkling stars */
+  body::before {
+    content: "";
+    position: fixed; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(1.5px 1.5px at 12% 18%, #fff, transparent),
+      radial-gradient(1.5px 1.5px at 70% 12%, #ffe9a8, transparent),
+      radial-gradient(2px 2px at 40% 60%, #fff, transparent),
+      radial-gradient(1.5px 1.5px at 88% 55%, #fff, transparent),
+      radial-gradient(1.5px 1.5px at 25% 85%, #ffe9a8, transparent);
+    background-size: 340px 300px;
+    opacity: .8;
+  }
+  main { position: relative; max-width: 54rem; margin: 0 auto; }
 
-  <script>
-    async function ask() {
-      const out = document.getElementById("out");
-      out.textContent = "Thinking...";
-      try {
-        const res = await fetch("/api/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: document.getElementById("q").value }),
-        });
-        const data = await res.json();
-        out.textContent = JSON.stringify(data, null, 2);
-      } catch (err) {
-        out.textContent = "Error: " + err;
-      }
+  /* ---- header ---- */
+  header { text-align: center; padding-top: .5rem; }
+  .owl { font-size: 4.5rem; line-height: 1; display: inline-block; }
+  h1 {
+    margin: .2rem 0 0;
+    font: 700 clamp(2rem, 6vw, 3.2rem)/1.1 var(--serif);
+    color: var(--candle);
+    text-shadow: 0 0 22px rgba(242,193,78,.55), 3px 3px 0 var(--ink);
+  }
+  .tagline { margin: .3rem 0 0; font: 600 1.6rem var(--hand); color: #f6dfe3; }
+
+  /* ---- question ---- */
+  form {
+    margin-top: 1.6rem;
+    padding: 1.2rem 1.4rem 1.4rem;
+    background: var(--paper);
+    border: 3px solid var(--ink);
+    border-radius: 18px;
+    box-shadow: 6px 6px 0 var(--ink);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 1rem;
+    align-items: end;
+  }
+  label { display: block; font: 600 1.35rem var(--hand); }
+  .wide { grid-column: 1 / -1; }
+  input, select {
+    width: 100%;
+    font: inherit;
+    padding: .55rem .8rem;
+    color: var(--ink);
+    background: #fffaf0;
+    border: 3px solid var(--ink);
+    border-radius: 12px;
+  }
+  input::placeholder { color: #8a7a64; font-style: italic; }
+  button.go {
+    font: 700 1.1rem var(--serif);
+    padding: .65rem 1.3rem;
+    color: #fff;
+    background: var(--tomato);
+    border: 3px solid var(--ink);
+    border-radius: 999px;
+    box-shadow: 3px 3px 0 var(--ink);
+    cursor: pointer;
+  }
+  button.go:hover:not(:disabled) { background: #e05a6c; }
+  button.go:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: none; }
+  button.go:disabled { opacity: .65; cursor: wait; }
+  :focus-visible { outline: 4px solid var(--candle); outline-offset: 2px; }
+
+  /* ---- shelf of question spines ---- */
+  .shelf {
+    display: flex; align-items: flex-end; flex-wrap: wrap; gap: 5px;
+    margin: 1.8rem .4rem 0; padding: 0 .8rem;
+    border-bottom: 14px solid var(--wood);
+    box-shadow: 0 6px 0 #4d2d14;
+  }
+  .shelf-label { width: 100%; margin: 0 0 .2rem; font: 600 1.35rem var(--hand); color: #f6dfe3; }
+  .spine {
+    writing-mode: vertical-rl;
+    min-height: 7rem;
+    max-height: 13rem;
+    padding: .7rem .45rem;
+    font: 600 1.15rem var(--hand);
+    color: #fff;
+    border: 3px solid var(--ink);
+    border-bottom: 0;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    transition: transform .15s;
+  }
+  .spine:nth-of-type(5n+1) { background: var(--teal); min-height: 9rem; }
+  .spine:nth-of-type(5n+2) { background: var(--plum); min-height: 7.5rem; }
+  .spine:nth-of-type(5n+3) { background: var(--mustard); color: var(--ink); min-height: 10.5rem; }
+  .spine:nth-of-type(5n+4) { background: var(--moss); min-height: 8rem; }
+  .spine:nth-of-type(5n+5) { background: var(--tomato); min-height: 9.5rem; }
+  .spine:hover { transform: translateY(-10px) rotate(-4deg); }
+
+  /* ---- loading ---- */
+  .loading { margin-top: 2rem; text-align: center; color: #f6dfe3; font: 600 1.5rem var(--hand); }
+
+  /* ---- bookworms chasing flying books ---- */
+  .chase { position: relative; height: 5.4rem; overflow: hidden; margin-top: .6rem; }
+  .pair { position: absolute; bottom: 0; left: var(--x, 0); display: flex; align-items: flex-end; gap: .3rem; }
+  .worm { display: flex; align-items: flex-end; }
+  .seg {
+    width: 1.1rem; height: 1.1rem; margin-left: -.35rem;
+    background: var(--c, var(--moss));
+    border: 2.5px solid var(--ink); border-radius: 50%;
+  }
+  .seg:first-child { margin-left: 0; }
+  .seg.head { position: relative; width: 1.6rem; height: 1.6rem; filter: brightness(1.18); }
+  .seg.head::before {
+    content: ""; position: absolute; top: .38rem; left: .3rem;
+    width: .24rem; height: .24rem; border-radius: 50%;
+    background: var(--ink); box-shadow: .55rem 0 0 var(--ink);
+  }
+  .seg.head::after {
+    content: ""; position: absolute; bottom: .22rem; left: .45rem;
+    width: .5rem; height: .26rem;
+    border-bottom: 2px solid var(--ink); border-radius: 0 0 50% 50%;
+  }
+  .fbook { position: relative; font-size: 2rem; line-height: 1; margin-bottom: var(--h, 1.4rem); }
+  .wing {
+    position: absolute; top: .2rem; width: .95rem; height: .6rem;
+    background: #fff; border: 2px solid var(--ink); border-radius: 50%;
+  }
+  .wing.l { left: -.8rem; transform-origin: right center; transform: rotate(-30deg); }
+  .wing.r { right: -.8rem; transform-origin: left center; transform: rotate(30deg); }
+
+  /* ---- result ---- */
+  .result { margin-top: 2rem; }
+  .owl-row { display: flex; gap: 1rem; align-items: flex-start; }
+  .owl-row .owl { font-size: 3.8rem; flex: none; }
+  .bubble {
+    position: relative;
+    flex: 1; min-width: 0;
+    padding: 1rem 1.3rem;
+    background: #fffaf0;
+    border: 3px solid var(--ink);
+    border-radius: 20px;
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+  .bubble::before {
+    content: ""; position: absolute; left: -15px; top: 1.4rem;
+    width: 24px; height: 24px; background: #fffaf0;
+    border-left: 3px solid var(--ink); border-bottom: 3px solid var(--ink);
+    transform: rotate(45deg);
+  }
+  .hoot { margin: 0 0 .3rem; font: 600 1.5rem var(--hand); color: var(--plum); }
+  .answer { white-space: pre-wrap; }
+  .meta { margin: .8rem 0 0; font: 600 1.25rem var(--hand); color: #6b5a74; }
+  .error { color: var(--tomato); font-weight: 700; }
+
+  .notes, .ledger {
+    margin-top: 1.4rem;
+    padding: 1rem 1.3rem;
+    background: var(--paper);
+    border: 3px solid var(--ink);
+    border-radius: 16px;
+    box-shadow: 5px 5px 0 var(--ink);
+  }
+  details + details { margin-top: .8rem; }
+  summary { cursor: pointer; font: 600 1.45rem var(--hand); }
+  .reasoning { margin: .4rem 0 0; }
+  pre {
+    margin: .6rem 0 0; padding: .9rem; overflow-x: auto;
+    font: .9rem/1.5 ui-monospace, Menlo, Consolas, monospace;
+    color: #ffe9a8; background: var(--ink); border-radius: 10px;
+  }
+  .ledger h2 { margin: 0 0 .5rem; font: 600 1.6rem var(--hand); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 1rem; }
+  th { text-align: left; padding: .4rem .8rem .4rem 0; border-bottom: 3px solid var(--ink); }
+  td { padding: .35rem .8rem .35rem 0; border-bottom: 2px dotted #b9a47a; vertical-align: top; }
+  tr:nth-child(even) td { background: rgba(237,174,73,.14); }
+
+  @media (max-width: 640px) {
+    form { grid-template-columns: 1fr; }
+    .owl-row { flex-direction: column; align-items: stretch; }
+    .bubble::before { display: none; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    header .owl { animation: bob 3.2s ease-in-out infinite; }
+    body::before { animation: twinkle 5s ease-in-out infinite alternate; }
+    .pair { animation: run 10s linear infinite; animation-delay: var(--d, 0s); }
+    .worm { animation: hop 1.1s ease-in-out infinite; }
+    .seg { animation: wig .5s ease-in-out infinite alternate; }
+    .seg:nth-child(even) { animation-delay: .25s; }
+    .fbook { animation: flutter 1.3s ease-in-out infinite; }
+    .wing.l { animation: flapl .3s ease-in-out infinite alternate; }
+    .wing.r { animation: flapr .3s ease-in-out infinite alternate; }
+    .result:not([hidden]) .bubble { animation: pop .4s cubic-bezier(.3,1.5,.5,1); }
+    @keyframes bob { 50% { transform: translateY(-10px) rotate(3deg); } }
+    @keyframes twinkle { from { opacity: .35; } to { opacity: .9; } }
+    @keyframes run { from { left: -9rem; } to { left: 100%; } }
+    @keyframes hop { 0%, 100% { transform: translateY(0); } 35%, 55% { transform: translateY(-1rem); } }
+    @keyframes wig { to { transform: translateY(-.2rem); } }
+    @keyframes flutter { 50% { transform: translateY(-.5rem) rotate(6deg); } }
+    @keyframes flapl { to { transform: rotate(20deg); } }
+    @keyframes flapr { to { transform: rotate(-20deg); } }
+    @keyframes pop { from { transform: scale(.85); opacity: 0; } to { transform: none; opacity: 1; } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="owl" aria-hidden="true">🦉</span>
+    <h1>The Longlist Library</h1>
+    <p class="tagline">Ask the owl anything. She has read every book on the shelves.</p>
+    <div id="chase-top"></div>
+  </header>
+
+  <form id="form">
+    <div class="wide">
+      <label for="q">What would you like to know?</label>
+      <input id="q" autocomplete="off" required placeholder="Which books did Yale University Press publish?">
+    </div>
+    <div>
+      <label for="model">Choose your librarian</label>
+      <select id="model"><option value="">Default</option></select>
+    </div>
+    <button class="go" id="go" type="submit">Ask the owl</button>
+  </form>
+
+  <div class="shelf" id="shelf"><p class="shelf-label">Not sure what to ask? Pull a book off the shelf:</p></div>
+
+  <div class="loading" id="loading" hidden>
+    <div id="chase-load"></div>
+    <span id="loadmsg"></span>
+  </div>
+
+  <section class="result" id="result" hidden aria-live="polite">
+    <div class="owl-row">
+      <span class="owl" aria-hidden="true">🦉</span>
+      <div class="bubble">
+        <p class="hoot" id="hoot">Hoo-hoo! Here is what I found:</p>
+        <div class="answer" id="answer"></div>
+        <p class="meta" id="meta"></p>
+      </div>
+    </div>
+    <div class="notes">
+      <details open><summary>How the owl worked it out</summary><p class="reasoning" id="thought"></p></details>
+      <details><summary>The secret spell (SQL)</summary><pre id="sql"></pre></details>
+    </div>
+  </section>
+
+  <section class="ledger" id="ledger" hidden>
+    <h2>Pages pulled from the shelves</h2>
+    <div class="scroll"><table id="table"></table></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// Each string is printed on a spine and asked as-is when clicked.
+// Edit these so they match the columns in your own database.
+const IDEAS = [
+  "Which publisher dominates the list, and by how much?",
+  "Which authors appear more than once?",
+  "Are there any duplicate titles?",
+  "Which book has the longest title?",
+  "Which books did Yale University Press publish?",
+  "Group the books by publisher and show the top five.",
+  "Which publishers have only one book on the list?",
+  "Tell me three surprising facts about this list.",
+];
+const WAITING = [
+  "Rummaging through the shelves...",
+  "Dusting off a promising volume...",
+  "Asking the bookworm for directions...",
+  "Counting pages, one by one...",
+];
+
+async function post(path, payload) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Request failed (" + res.status + ")");
+  return data;
+}
+
+// Bookworms chasing flying books (header decoration and loading scene)
+function makeChase() {
+  const books = ["📕", "📗", "📘"];
+  const colors = ["#5a8f4a", "#d1495b", "#6a4c93"];
+  const heights = [1.2, 2.2, 0.7];
+  const d = document.createElement("div");
+  d.className = "chase";
+  d.setAttribute("aria-hidden", "true");
+  d.innerHTML = books.map((b, i) =>
+    '<div class="pair" style="--x:' + (5 + i * 33) + '%;--d:' + (-i * 3) + 's;--h:' + heights[i] + 'rem;--c:' + colors[i] + '">' +
+      '<div class="worm"><i class="seg"></i><i class="seg"></i><i class="seg"></i><i class="seg head"></i></div>' +
+      '<div class="fbook"><i class="wing l"></i>' + b + '<i class="wing r"></i></div>' +
+    '</div>'
+  ).join("");
+  return d;
+}
+$("chase-top").appendChild(makeChase());
+$("chase-load").appendChild(makeChase());
+
+// Librarian dropdown, filled from the API
+(async () => {
+  try {
+    const data = await (await fetch("/api/models")).json();
+    const sel = $("model");
+    sel.innerHTML = "";
+    for (const name of Object.keys(data.models)) {
+      const opt = new Option(name, name, false, name === data.active);
+      sel.appendChild(opt);
     }
-  </script>
+  } catch (e) { /* keep the Default option */ }
+})();
+
+// Question spines on the shelf
+for (const idea of IDEAS) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "spine";
+  b.textContent = idea;
+  b.onclick = () => { $("q").value = idea; $("form").requestSubmit(); };
+  $("shelf").appendChild(b);
+}
+
+function showTable(result) {
+  const t = $("table");
+  t.innerHTML = "";
+  const head = t.createTHead().insertRow();
+  for (const c of result.columns) {
+    const th = document.createElement("th");
+    th.textContent = c;
+    head.appendChild(th);
+  }
+  const body = t.createTBody();
+  for (const row of result.rows) {
+    const tr = body.insertRow();
+    for (const cell of row) tr.insertCell().textContent = cell === null ? "" : cell;
+  }
+  $("ledger").hidden = result.rows.length === 0;
+}
+
+let ticker;
+function startWaiting() {
+  let i = 0;
+  $("loadmsg").textContent = WAITING[0];
+  $("loading").hidden = false;
+  ticker = setInterval(() => { $("loadmsg").textContent = WAITING[++i % WAITING.length]; }, 2200);
+}
+function stopWaiting() { clearInterval(ticker); $("loading").hidden = true; }
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const go = $("go");
+  go.disabled = true;
+  $("result").hidden = true;
+  $("ledger").hidden = true;
+  startWaiting();
+  try {
+    const data = await post("/api/ask", { question: $("q").value, model: $("model").value || null });
+    stopWaiting();
+    $("hoot").textContent = "Hoo-hoo! Here is what I found:";
+    $("answer").className = "answer";
+    $("answer").textContent = data.answer;
+    $("thought").textContent = data.thought_process;
+    $("sql").textContent = data.sql || "No spell was needed this time.";
+    const n = data.tool_calls;
+    $("meta").textContent = data.model + " checked the shelves " + n + (n === 1 ? " time." : " times.");
+    $("result").hidden = false;
+    if (data.sql) {
+      try { showTable(await post("/api/sql", { sql: data.sql })); } catch (err) { /* table is optional */ }
+    }
+  } catch (err) {
+    stopWaiting();
+    $("hoot").textContent = "Oh dear, the owl tripped over a stack of books:";
+    $("answer").className = "answer error";
+    $("answer").textContent = err.message;
+    $("thought").textContent = "";
+    $("sql").textContent = "";
+    $("meta").textContent = "Try again, or choose a different librarian.";
+    $("result").hidden = false;
+  } finally {
+    go.disabled = false;
+  }
+});
+</script>
 </body>
 </html>
