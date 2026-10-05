@@ -1,0 +1,5 @@
+{
+    "thought_process": "Need to calculate the average rating for the book titled \"The Years\". Join books and ratings on book_id, filter by title, aggregate with AVG(rating).",
+    "sql": "SELECT AVG(r.rating) AS avg_rating FROM books b JOIN ratings r ON r.book_id = b.id WHERE b.title = 'The Years';",
+    "explanation": "Shows the average user rating for the book \"The Years\"."
+}
