@@ -141,6 +141,94 @@ uv run python test_mcp.py
 
 This lists the available tools and runs `SELECT count(*) FROM books`.
 
+## Deployment (Windows, macOS, Linux)
+
+Because the project is containerized, deployment is essentially the same on every operating system. Only the Docker install step differs.
+
+### Option 1: Docker (recommended)
+
+**Install Docker**
+
+| OS | Steps |
+|----|-------|
+| **Windows** | Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) with the WSL 2 backend enabled. Keep the project inside your WSL filesystem (e.g. `~/nl-sql`) rather than `C:\`, since builds are faster there. |
+| **macOS** | Install Docker Desktop. Apple Silicon and Intel both work, since the Python, nginx, and uv images are multi-arch. |
+| **Linux** | Install [Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/). Then run `sudo usermod -aG docker $USER` and log out and back in so you don't need `sudo`. |
+
+**Run (identical on all systems)**
+
+```bash
+# from the project folder, with .env and longlist.db present
+docker compose up --build -d
+docker compose logs -f api     # follow API logs
+docker compose down            # stop everything
+```
+
+Open http://localhost:3000 for the app and http://localhost:6006 for Phoenix.
+
+### Option 2: Without Docker
+
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
+
+**Install uv**
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**Run (two terminals)**
+
+```bash
+# Terminal 1: MCP database server
+uv sync
+uv run python db_server.py
+```
+
+```bash
+# Terminal 2: API
+uv run uvicorn agent:app --host 0.0.0.0 --port 8000
+```
+
+If you set environment variables by hand instead of using `.env`:
+
+```bash
+# macOS / Linux
+export MCP_URL=http://127.0.0.1:8001/mcp
+```
+
+```powershell
+# Windows PowerShell
+$env:MCP_URL = "http://127.0.0.1:8001/mcp"
+```
+
+Without Docker you also need to:
+
+1. Change the Phoenix endpoint in `agent.py` to `http://localhost:6006/v1/traces`, or remove the tracing block.
+2. Serve `frontend/index.html` behind something that proxies `/api/` to port 8000, or call the API directly.
+
+### Deploying to a server (Linux VPS)
+
+The same Compose setup works on any Linux VM (AWS, DigitalOcean, Hetzner, etc.):
+
+1. Install Docker, copy the project over, and add your `.env`.
+2. Run `docker compose up --build -d`.
+3. Open only ports 80/443 in the firewall, and put a reverse proxy such as Caddy or nginx in front for HTTPS.
+4. Do not expose Phoenix (port 6006) publicly.
+5. Change the CORS origin in `agent.py` from `http://localhost:3000` to your domain.
+6. `/sql` is unauthenticated, so add authentication or block it at the proxy.
+
+### Common gotchas
+
+- **Windows line endings**: if scripts fail with odd errors, check files didn't get CRLF endings (Git's `core.autocrlf` can cause this).
+- **Port conflicts**: if 3000 or 6006 is taken, change the left side of the mapping in `docker-compose.yml` (e.g. `"3001:80"`).
+- **Code changes**: rebuild with `docker compose up --build`, since code is copied into the image rather than mounted.
+
 ## API Reference
 
 ### `GET /models`
