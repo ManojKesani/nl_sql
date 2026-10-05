@@ -295,7 +295,7 @@ Returns `400` for invalid or non-`SELECT` SQL.
 
 ## Safety Notes
 
-- Queries must be a single `SELECT` or `WITH` statement; anything else is rejected.
+- Queries must be a single read-only SELECT or WITH statement. Subqueries, CTEs, joins, and UNION are allowed; multiple statements and writes are rejected.
 - The database connection is opened read-only (`?mode=ro`).
 - The agent tool returns at most 20 rows per call; `/sql` returns up to 100.
 - CORS is limited to `http://localhost:3000` (GET and POST only).
