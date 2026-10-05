@@ -2,6 +2,10 @@ services:
   api:
     build: .
     env_file: .env
+    environment:
+      MCP_URL: http://mcp:8001/mcp
+    depends_on:
+      - mcp
 
 
   web:
@@ -15,3 +19,6 @@ services:
     image: arizephoenix/phoenix:latest
     ports:
       - "6006:6006"
+  mcp:
+    build: .
+    command: python db_server.py

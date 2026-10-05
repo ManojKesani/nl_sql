@@ -5,7 +5,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-COPY agent.py sys_prompt.json models.json longlist.db ./
+COPY agent.py db_server.py sys_prompt.json models.json longlist.db ./
 
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000

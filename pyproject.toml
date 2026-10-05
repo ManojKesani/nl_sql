@@ -21,6 +21,7 @@ dependencies = [
     "streamlit>=1.65.0",
     "uvicorn>=0.54.0",
     "langchain[mcp]>=1.4.3",
+    "langchain-mcp-adapters>=0.3.1",
 ]
 
 [project.scripts]

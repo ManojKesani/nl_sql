@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field
 from openinference.instrumentation.langchain import LangChainInstrumentor
 from phoenix.otel import register
 
+import asyncio
+import os
+from mcp import Client
+
+MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:8001/mcp")
+
 load_dotenv()
 # Phoenix tracing
 tracer_provider = register(
@@ -79,11 +85,14 @@ def run_query(sql: str, limit: int = 100) -> dict:
 def query_database(sql: str) -> str:
     """Run a read-only SQLite SELECT on the books database.
     Returns columns and up to 20 rows, or an ERROR you should use to fix the query."""
+    async def _call():
+        async with Client(MCP_URL) as client:
+            return await client.call_tool("query_database", {"sql": sql})
     try:
-        r = run_query(sql, limit=20)
-        return f"columns={r['columns']} rows={r['rows']}"
+        result = asyncio.run(_call())
+        return result.content[0].text
     except Exception as e:
-        return f"ERROR: {e}"
+        return f"ERROR: could not reach database tool: {e}" 
 
 
 # ---------- model providers ----------
