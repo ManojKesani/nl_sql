@@ -1,0 +1,6 @@
+{
+  "model": "groq-gpt-oss-120b",
+  "fallbacks": [],
+  "escalate_to": "groq-qwen",
+  "run_limit": 8
+}

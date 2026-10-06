@@ -2176,6 +2176,7 @@ dependencies = [
     { name = "openinference-instrumentation-langchain" },
     { name = "pandas" },
     { name = "python-dotenv" },
+    { name = "sqlglot" },
     { name = "streamlit" },
     { name = "uvicorn" },
 ]
@@ -2194,6 +2195,7 @@ requires-dist = [
     { name = "openinference-instrumentation-langchain", specifier = ">=0.1.78" },
     { name = "pandas", specifier = ">=3.0.6" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
+    { name = "sqlglot", specifier = ">=30.18.0" },
     { name = "streamlit", specifier = ">=1.65.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]

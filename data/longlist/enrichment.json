@@ -1,0 +1,151 @@
+{
+  "db_description": "A small literary catalog of 78 books (2018–2023) with their authors, translators, publishers, and a large ratings table (~604k user ratings on a 1–5 scale). It supports queries about authorship, translation, publishing, and reader reception.",
+  "tables": [
+    {
+      "name": "authored",
+      "description": "Many-to-many join linking authors to books (78 rows).",
+      "columns": [
+        {
+          "name": "author_id",
+          "description": "FK to authors.id"
+        },
+        {
+          "name": "book_id",
+          "description": "FK to books.id"
+        }
+      ]
+    },
+    {
+      "name": "authors",
+      "description": "Authors of the books (72 rows).",
+      "columns": [
+        {
+          "name": "id",
+          "description": "Primary key, 1..72"
+        },
+        {
+          "name": "name",
+          "description": "Author name; 72 distinct values, includes non-ASCII (e.g. 'Éric Vuillard', 'Yōko Ogawa')"
+        },
+        {
+          "name": "country",
+          "description": "Country of origin; 34 distinct values (e.g. 'France', 'South Korea')"
+        },
+        {
+          "name": "birth",
+          "description": "Birth year, range 1937..1991"
+        }
+      ]
+    },
+    {
+      "name": "books",
+      "description": "The 78 books in the catalog.",
+      "columns": [
+        {
+          "name": "id",
+          "description": "Primary key, 1..78"
+        },
+        {
+          "name": "isbn",
+          "description": "ISBN string; 78 distinct values"
+        },
+        {
+          "name": "title",
+          "description": "Book title; 78 distinct values"
+        },
+        {
+          "name": "publisher_id",
+          "description": "FK to publishers.id, range 1..33"
+        },
+        {
+          "name": "format",
+          "description": "Physical format: 'paperback' or 'hardcover'"
+        },
+        {
+          "name": "pages",
+          "description": "Page count, range 69..944"
+        },
+        {
+          "name": "published",
+          "description": "Full publication date as TEXT, range '2017-05-03'..'2023-04-27'"
+        },
+        {
+          "name": "year",
+          "description": "Publication year, values 2018..2023"
+        }
+      ]
+    },
+    {
+      "name": "publishers",
+      "description": "Publishing houses (33 rows).",
+      "columns": [
+        {
+          "name": "id",
+          "description": "Primary key, 1..33"
+        },
+        {
+          "name": "publisher",
+          "description": "Publisher name; 33 distinct values (e.g. 'Yale University Press', 'W&N')"
+        }
+      ]
+    },
+    {
+      "name": "ratings",
+      "description": "User ratings, ~604k rows; no user identifier, so rows are anonymous per-book ratings.",
+      "columns": [
+        {
+          "name": "book_id",
+          "description": "FK to books.id, range 1..78"
+        },
+        {
+          "name": "rating",
+          "description": "User rating, integer 1..5"
+        }
+      ]
+    },
+    {
+      "name": "translated",
+      "description": "Many-to-many join linking translators to books (87 rows).",
+      "columns": [
+        {
+          "name": "translator_id",
+          "description": "FK to translators.id, range 1..74"
+        },
+        {
+          "name": "book_id",
+          "description": "FK to books.id, range 1..78"
+        }
+      ]
+    },
+    {
+      "name": "translators",
+      "description": "Translators (74 rows).",
+      "columns": [
+        {
+          "name": "id",
+          "description": "Primary key, 1..74"
+        },
+        {
+          "name": "name",
+          "description": "Translator name; 74 distinct values"
+        }
+      ]
+    }
+  ],
+  "join_paths": [
+    "authored.book_id = books.id",
+    "authored.author_id = authors.id",
+    "translated.book_id = books.id",
+    "translated.translator_id = translators.id",
+    "books.publisher_id = publishers.id",
+    "ratings.book_id = books.id"
+  ],
+  "quirks": [
+    "books.year is redundant with books.published (year is derivable from the date string), but the two can disagree: published ranges down to '2017-05-03' while year only takes values 2018..2023. Prefer books.year for year-based filters, or verify consistency before relying on either.",
+    "ratings has no user or timestamp column; it is a flat list of anonymous 1–5 ratings per book, so 'number of ratings' = COUNT(*) per book_id.",
+    "authored and translated are both many-to-many: a book can have multiple authors and multiple translators, so joins can multiply rows — use DISTINCT or aggregate when counting books/authors.",
+    "authors.name and translators.name contain non-ASCII characters (e.g. 'Éric Vuillard', 'Yōko Ogawa'); match on exact strings or use case/unicode-aware comparisons.",
+    "publishers.publisher is the name column (not 'name'); join via books.publisher_id = publishers.id.",
+    "ratings is by far the largest table (~604k rows vs. <100 in others); aggregate on book_id rather than scanning raw rows."
+  ]
+}

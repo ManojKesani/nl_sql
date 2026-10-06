@@ -1,15 +1,23 @@
 {
-  "active": "groq-qwen",
+  "active": "groq-gpt-oss-120b",
   "models": {
     "groq-qwen": {
       "provider": "groq",
       "model": "qwen/qwen3.8-27b",
-      "temperature": 0
+      "temperature": 0,
+      "rpm": 2
     },
-    "groq-gpt-oss": {
+    "groq-gpt-oss-120b": {
+      "provider": "groq",
+      "model": "openai/gpt-oss-120b",
+      "temperature": 0,
+      "rpm": 2
+    },
+    "groq-gpt-oss-20b": {
       "provider": "groq",
       "model": "openai/gpt-oss-20b",
-      "temperature": 0
+      "temperature": 0,
+      "rpm": 2
     },
     "nvidia-nemotron": {
       "provider": "nvidia",

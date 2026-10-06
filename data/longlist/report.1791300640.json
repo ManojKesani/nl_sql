@@ -1,0 +1,88 @@
+[
+  {
+    "model": "groq-qwen",
+    "prompt_version": "v1",
+    "n": 6,
+    "accuracy": 1.0,
+    "avg_llm_calls": 2.33,
+    "avg_input_tokens": 6338,
+    "avg_latency_s": 47.15,
+    "by_category": {
+      "simple_filter": "6/6"
+    },
+    "rows": [
+      {
+        "id": "longlist-001",
+        "category": "simple_filter",
+        "correct": true,
+        "pred_sql": "SELECT b.title FROM books b JOIN publishers p ON b.publisher_id = p.id WHERE p.publisher = 'Yale University Press' ORDER BY b.title",
+        "error": null,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "input_tokens": 5323,
+        "output_tokens": 181,
+        "total_s": 31.389
+      },
+      {
+        "id": "longlist-002",
+        "category": "simple_filter",
+        "correct": true,
+        "pred_sql": "SELECT title FROM books WHERE format = 'hardcover' ORDER BY title",
+        "error": null,
+        "llm_calls": 4,
+        "tool_calls": 3,
+        "input_tokens": 11350,
+        "output_tokens": 431,
+        "total_s": 68.913
+      },
+      {
+        "id": "longlist-003",
+        "category": "simple_filter",
+        "correct": true,
+        "pred_sql": "SELECT pages FROM books WHERE title = 'Whale'",
+        "error": null,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "input_tokens": 5293,
+        "output_tokens": 126,
+        "total_s": 44.846
+      },
+      {
+        "id": "longlist-004",
+        "category": "simple_filter",
+        "correct": true,
+        "pred_sql": "SELECT title FROM books WHERE year = 2023 ORDER BY title",
+        "error": null,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "input_tokens": 5386,
+        "output_tokens": 195,
+        "total_s": 46.39
+      },
+      {
+        "id": "longlist-005",
+        "category": "simple_filter",
+        "correct": true,
+        "pred_sql": "SELECT name FROM authors WHERE country = 'France' ORDER BY name",
+        "error": null,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "input_tokens": 5360,
+        "output_tokens": 184,
+        "total_s": 45.884
+      },
+      {
+        "id": "longlist-006",
+        "category": "simple_filter",
+        "correct": true,
+        "pred_sql": "SELECT isbn FROM books WHERE title = 'Vernon Subutex 1'",
+        "error": null,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "input_tokens": 5318,
+        "output_tokens": 148,
+        "total_s": 45.452
+      }
+    ]
+  }
+]

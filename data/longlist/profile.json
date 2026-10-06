@@ -1,0 +1,491 @@
+{
+  "db_file": "longlist.db",
+  "tables": {
+    "authored": {
+      "type": "table",
+      "row_count": 78,
+      "columns": [
+        {
+          "name": "author_id",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 72,
+          "min": 1,
+          "max": 72
+        },
+        {
+          "name": "book_id",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 78,
+          "min": 1,
+          "max": 78
+        }
+      ],
+      "foreign_keys": [
+        {
+          "from": "book_id",
+          "to_table": "books",
+          "to": "id"
+        },
+        {
+          "from": "author_id",
+          "to_table": "authors",
+          "to": "id"
+        }
+      ],
+      "sample_rows": [
+        [
+          23,
+          1
+        ],
+        [
+          13,
+          2
+        ],
+        [
+          49,
+          3
+        ]
+      ]
+    },
+    "authors": {
+      "type": "table",
+      "row_count": 72,
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "pk": true,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 72,
+          "min": 1,
+          "max": 72
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 72,
+          "min": "Adania Shibli",
+          "max": "\u00c9ric Vuillard",
+          "top_values": [
+            "\u00c9ric Vuillard",
+            "Zou Jingzhi",
+            "Y\u014dko Ogawa",
+            "Wu Ming-Yi",
+            "Willem Anker"
+          ]
+        },
+        {
+          "name": "country",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 34,
+          "min": "Argentina",
+          "max": "Ukraine",
+          "top_values": [
+            "France",
+            "Spain",
+            "South Korea",
+            "Germany",
+            "Argentina"
+          ]
+        },
+        {
+          "name": "birth",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 38,
+          "min": 1937,
+          "max": 1991
+        }
+      ],
+      "foreign_keys": [],
+      "sample_rows": [
+        [
+          1,
+          "Adania Shibli",
+          "Palestine",
+          1974
+        ],
+        [
+          2,
+          "Ahmed Saadawi",
+          "Iraq",
+          1973
+        ],
+        [
+          3,
+          "Alia Trabucco Zer\u00e1n",
+          "Chile",
+          1983
+        ]
+      ]
+    },
+    "books": {
+      "type": "table",
+      "row_count": 78,
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "pk": true,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 78,
+          "min": 1,
+          "max": 78
+        },
+        {
+          "name": "isbn",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 78,
+          "min": "9780300224313",
+          "max": "9788439736967",
+          "top_values": [
+            "9788439736967",
+            "9781999992880",
+            "9781999992859",
+            "9781999722784",
+            "9781999368432"
+          ]
+        },
+        {
+          "name": "title",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 78,
+          "min": "A New Name: Septology VI-VII",
+          "max": "Wretchedness",
+          "top_values": [
+            "Wretchedness",
+            "While We Were Dreaming",
+            "When We Cease to Understand the World",
+            "Whale",
+            "Vernon Subutex 1"
+          ]
+        },
+        {
+          "name": "publisher_id",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 33,
+          "min": 1,
+          "max": 33
+        },
+        {
+          "name": "format",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 2,
+          "min": "hardcover",
+          "max": "paperback",
+          "values": [
+            "paperback",
+            "hardcover"
+          ]
+        },
+        {
+          "name": "pages",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 59,
+          "min": 69,
+          "max": 944
+        },
+        {
+          "name": "published",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 73,
+          "min": "2017-05-03",
+          "max": "2023-04-27"
+        },
+        {
+          "name": "year",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 6,
+          "min": 2018,
+          "max": 2023,
+          "values": [
+            2023,
+            2022,
+            2021,
+            2020,
+            2019,
+            2018
+          ]
+        }
+      ],
+      "foreign_keys": [
+        {
+          "from": "publisher_id",
+          "to_table": "publishers",
+          "to": "id"
+        }
+      ],
+      "sample_rows": [
+        [
+          1,
+          "9788439736967",
+          "Boulder",
+          10,
+          "paperback",
+          112,
+          "2022-08-02",
+          2023
+        ],
+        [
+          2,
+          "9781628971538",
+          "Whale",
+          3,
+          "paperback",
+          368,
+          "2023-01-19",
+          2023
+        ],
+        [
+          3,
+          "9781642861181",
+          "The Gospel According to the New World",
+          32,
+          "paperback",
+          184,
+          "2023-03-07",
+          2023
+        ]
+      ]
+    },
+    "publishers": {
+      "type": "table",
+      "row_count": 33,
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "pk": true,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 33,
+          "min": 1,
+          "max": 33
+        },
+        {
+          "name": "publisher",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 33,
+          "min": "And Other Stories",
+          "max": "Yale University Press",
+          "top_values": [
+            "Yale University Press",
+            "World Editions",
+            "William Heinemann",
+            "W&N",
+            "Verso Fiction"
+          ]
+        }
+      ],
+      "foreign_keys": [],
+      "sample_rows": [
+        [
+          1,
+          "And Other Stories"
+        ],
+        [
+          2,
+          "Charco Press"
+        ],
+        [
+          3,
+          "Europa Editions"
+        ]
+      ]
+    },
+    "ratings": {
+      "type": "table",
+      "row_count": 604173,
+      "columns": [
+        {
+          "name": "book_id",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 78,
+          "min": 1,
+          "max": 78
+        },
+        {
+          "name": "rating",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 5,
+          "min": 1,
+          "max": 5,
+          "values": [
+            4,
+            3,
+            5,
+            2,
+            1
+          ]
+        }
+      ],
+      "foreign_keys": [
+        {
+          "from": "book_id",
+          "to_table": "books",
+          "to": "id"
+        }
+      ],
+      "sample_rows": [
+        [
+          1,
+          3
+        ],
+        [
+          1,
+          5
+        ],
+        [
+          1,
+          4
+        ]
+      ]
+    },
+    "translated": {
+      "type": "table",
+      "row_count": 87,
+      "columns": [
+        {
+          "name": "translator_id",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 74,
+          "min": 1,
+          "max": 74
+        },
+        {
+          "name": "book_id",
+          "type": "INTEGER",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 77,
+          "min": 1,
+          "max": 78
+        }
+      ],
+      "foreign_keys": [
+        {
+          "from": "book_id",
+          "to_table": "books",
+          "to": "id"
+        },
+        {
+          "from": "translator_id",
+          "to_table": "translators",
+          "to": "id"
+        }
+      ],
+      "sample_rows": [
+        [
+          53,
+          1
+        ],
+        [
+          33,
+          2
+        ],
+        [
+          56,
+          3
+        ]
+      ]
+    },
+    "translators": {
+      "type": "table",
+      "row_count": 74,
+      "columns": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "pk": true,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 74,
+          "min": 1,
+          "max": 74
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "pk": false,
+          "notnull": false,
+          "null_count": 0,
+          "distinct_count": 74,
+          "min": "Adrian Nathan West",
+          "max": "Tiffany Tsao",
+          "top_values": [
+            "Tiffany Tsao",
+            "Susan Bernofsky",
+            "Stephen Snyder",
+            "Sora Kim-Russell",
+            "Sophie Lewis"
+          ]
+        }
+      ],
+      "foreign_keys": [],
+      "sample_rows": [
+        [
+          1,
+          "Adrian Nathan West"
+        ],
+        [
+          2,
+          "Alison L. Strayer"
+        ],
+        [
+          3,
+          "Angela Rodel"
+        ]
+      ]
+    }
+  }
+}

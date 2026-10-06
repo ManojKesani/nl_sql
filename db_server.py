@@ -1,25 +1,13 @@
-# db_server.py
-import sqlite3
-
+import os
 import anyio
 from mcp.server.mcpserver import MCPServer
 
-DB_FILE = "longlist.db"
+from nlsql.config import settings
+from nlsql.db.executor import run_query
+
+DB_FILE = os.getenv("DB_FILE", "longlist.db")  # becomes per-db_id once the registry exists
 
 mcp = MCPServer("longlist-db")
-
-
-def run_query(sql: str, limit: int = 100) -> dict:
-    s = sql.strip().rstrip(";").strip()
-    if not s.lower().startswith(("select", "with")) or ";" in s:
-        raise ValueError("Only a single SELECT/WITH statement is allowed.")
-    conn = sqlite3.connect(f"file:{DB_FILE}?mode=ro", uri=True)
-    try:
-        cur = conn.execute(s)
-        rows = cur.fetchmany(limit)
-        return {"columns": [c[0] for c in cur.description], "rows": rows}
-    finally:
-        conn.close()
 
 
 @mcp.tool()
@@ -27,10 +15,10 @@ def query_database(sql: str) -> str:
     """Run a read-only SQLite SELECT on the books database.
     Returns columns and up to 20 rows, or an ERROR you should use to fix the query."""
     try:
-        r = run_query(sql, limit=20)
-        return f"columns={r['columns']} rows={r['rows']}"
+        return run_query(DB_FILE, sql, limit=settings.tool_row_limit,
+                         timeout_s=settings.query_timeout_s).to_text()
     except Exception as e:
-        return f"ERROR: {e}"
+        return f"ERROR: {type(e).__name__}: {e}"
 
 
 if __name__ == "__main__":

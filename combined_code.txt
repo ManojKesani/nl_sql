@@ -1,0 +1,1340 @@
+================================================================================
+FILE: __init__.py
+================================================================================
+
+
+
+
+================================================================================
+FILE: agent/__init__.py
+================================================================================
+
+
+
+
+================================================================================
+FILE: agent/build.py
+================================================================================
+
+"""One agent per (db_id, model). The tool is bound to the db, so the LLM can't pick another one."""
+from __future__ import annotations
+
+from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
+from langchain.tools import tool
+
+from .. import registry
+from ..config import settings
+from ..db.executor import run_query
+from ..ingest import promptgen
+from ..llm.factory import build_middleware, build_model
+from .schema import SQLResponse
+
+
+def make_tool(db_path: str):
+    @tool
+    def query_database(sql: str) -> str:
+        """Run a read-only SQLite SELECT. Returns columns and up to 20 rows, or an ERROR to fix."""
+        try:
+            return run_query(db_path, sql, limit=settings.tool_row_limit,
+                             timeout_s=settings.query_timeout_s).to_text()
+        except Exception as e:
+            return f"ERROR: {type(e).__name__}: {e}"
+    return query_database
+
+
+def build_agent(db_id: str, model_nick: str, fallbacks: list[str] | None = None, run_limit: int = 8):
+    version, prompt = promptgen.load_latest(db_id)
+    agent = create_agent(
+        model=build_model(model_nick),
+        tools=[make_tool(registry.get(db_id)["path"])],
+        system_prompt=prompt,
+        response_format=ToolStrategy(SQLResponse),
+        middleware=build_middleware(fallbacks, run_limit=run_limit),
+    )
+    return agent, version
+
+
+================================================================================
+FILE: agent/router.py
+================================================================================
+
+"""Pick a db_id. One DB: no LLM call. Several: a small model chooses from the descriptions."""
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+from .. import registry
+from ..llm.factory import build_model
+from ..llm.structured import structured_call
+
+
+class Route(BaseModel):
+    db_id: str
+    reason: str = Field(description="One short sentence.")
+
+
+SYSTEM = """Pick the single database best suited to the user's question.
+Answer with one db_id from the list, exactly as written.
+
+DATABASES:
+{dbs}"""
+
+
+def route(question: str, model_nick: str | None = None) -> str:
+    dbs = registry.describe_all()
+    if not dbs:
+        raise RuntimeError("No databases registered. Run the ingest pipeline first.")
+    if len(dbs) == 1:
+        return next(iter(dbs))
+    listing = "\n".join(f"- {k}: {v or '(no description)'}" for k, v in dbs.items())
+    r = structured_call(build_model(model_nick), Route, SYSTEM.format(dbs=listing), question)
+    if r.db_id not in dbs:
+        raise ValueError(f"Router returned unknown db_id '{r.db_id}'. Options: {list(dbs)}")
+    return r.db_id
+
+
+================================================================================
+FILE: agent/schema.py
+================================================================================
+
+from pydantic import BaseModel, Field
+
+
+class SQLResponse(BaseModel):
+    thought_process: str = Field(description="Brief reasoning: tables, joins, filters, assumptions.")
+    sql: str = Field(description="The final SQLite query exactly as run with query_database. Empty only if unanswerable.")
+    answer: str = Field(description="Plain-English answer based ONLY on returned rows.")
+
+
+================================================================================
+FILE: agent/service.py
+================================================================================
+
+"""ask(): route -> run agent -> detect failure -> escalate once to the bigger model."""
+from __future__ import annotations
+
+import threading
+
+from .. import registry
+from ..llm.usage import UsageTracker
+from ..observability import trace_context
+from .build import build_agent
+from .router import route
+
+_agents: dict = {}
+_lock = threading.Lock()
+
+
+def _get_agent(db_id: str, model: str, fallbacks: list[str], run_limit: int):
+    key = (db_id, model)
+    with _lock:
+        if key not in _agents:
+            _agents[key] = build_agent(db_id, model, fallbacks, run_limit)
+        return _agents[key]
+
+
+def _failed(result: dict, tracker: UsageTracker) -> str | None:
+    """Return a reason string if the run looks bad, else None."""
+    sr = result.get("structured_response")
+    if sr is None:
+        return "no structured response (call limit or parse failure)"
+    tool_msgs = [m for m in result["messages"] if getattr(m, "name", None) == "query_database"]
+    if tool_msgs and str(tool_msgs[-1].content).startswith("ERROR"):
+        return "last query still errored"
+    if not tool_msgs and sr.sql:
+        return "answered without running the query"
+    return None
+
+
+def _attempt(db_id: str, model: str, question: str, cfg: dict) -> dict:
+    agent, version = _get_agent(db_id, model, cfg["fallbacks"], cfg["run_limit"])
+    t = UsageTracker()
+    try:
+        with trace_context(db_id, model, version):
+            result = agent.invoke({"messages": [{"role": "user", "content": question}]},
+                                  config={"callbacks": [t], "recursion_limit": 25})
+    except Exception as e:
+        return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:200]}",
+                "usage": t.summary(), "model": model, "prompt_version": version}
+    reason = _failed(result, t)
+    out = {"ok": reason is None, "reason": reason, "usage": t.summary(),
+           "model": model, "prompt_version": version}
+    if result.get("structured_response") is not None:
+        out["response"] = result["structured_response"].model_dump()
+    return out
+
+
+def ask(question: str, db_id: str | None = None, model: str | None = None) -> dict:
+    db_id = db_id or route(question)
+    cfg = registry.get_config(db_id)
+    model = model or cfg["model"]
+    if not model:
+        raise ValueError(f"No model configured for '{db_id}'. Use registry.set_config or pass model.")
+
+    first = _attempt(db_id, model, question, cfg)
+    final, escalated = first, False
+    if not first["ok"] and cfg["escalate_to"] and cfg["escalate_to"] != model:
+        second = _attempt(db_id, cfg["escalate_to"], question, cfg)
+        escalated = True
+        # keep the escalated result if it worked, else keep whichever produced a response
+        final = second if second["ok"] or "response" not in first else first
+
+    return {
+        "db_id": db_id,
+        "model": final["model"],
+        "prompt_version": final["prompt_version"],
+        "escalated": escalated,
+        "ok": final["ok"],
+        "reason": final["reason"],
+        "usage": {"first_attempt": first["usage"],
+                  **({"escalation": second["usage"]} if escalated else {})},
+        **(final.get("response") or {}),
+    }
+
+
+================================================================================
+FILE: api.py
+================================================================================
+
+from __future__ import annotations
+
+import hmac
+from typing import Optional
+
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from . import registry
+from .agent import service
+from .config import settings
+from .db.executor import QueryRejected, QueryTimeout, run_query
+from .llm.factory import UnknownModel, load_model_config
+from .observability import setup_tracing
+
+setup_tracing()
+app = FastAPI(title="nl-sql")
+app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins),
+                   allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-API-Key"])
+
+
+def auth(x_api_key: str = Header(default="")):
+    if settings.api_key and not hmac.compare_digest(x_api_key, settings.api_key):
+        raise HTTPException(401, "Invalid or missing X-API-Key")
+
+
+class Question(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    db_id: Optional[str] = None
+    model: Optional[str] = None
+
+
+class SqlBody(BaseModel):
+    db_id: str
+    sql: str = Field(max_length=5000)
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
+@app.get("/dbs", dependencies=[Depends(auth)])
+def dbs():
+    return {k: {"description": v, **registry.get_config(k)} for k, v in registry.describe_all().items()}
+
+
+@app.get("/models", dependencies=[Depends(auth)])
+def models():
+    cfg = load_model_config()
+    return {"active": cfg["active"],
+            "models": {k: {"provider": v["provider"], "model": v["model"]} for k, v in cfg["models"].items()}}
+
+
+@app.post("/ask", dependencies=[Depends(auth)])
+def ask(body: Question):
+    try:
+        return service.ask(body.question, body.db_id, body.model)
+    except (KeyError, UnknownModel, ValueError) as e:
+        raise HTTPException(404 if isinstance(e, (KeyError, UnknownModel)) else 400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"{type(e).__name__}: {e}")
+
+
+@app.post("/sql", dependencies=[Depends(auth)])
+def sql(body: SqlBody):
+    try:
+        path = registry.get(body.db_id)["path"]
+        return run_query(path, body.sql, limit=settings.api_row_limit,
+                         timeout_s=settings.query_timeout_s).to_dict()
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except (QueryRejected, QueryTimeout) as e:
+        raise HTTPException(400, str(e))
+
+
+================================================================================
+FILE: config.py
+================================================================================
+
+"""Central settings. load_dotenv() runs BEFORE any os.getenv (fixes the old ordering bug)."""
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+@dataclass(frozen=True)
+class Settings:
+    data_dir: Path = ROOT / "data"
+    models_file: Path = ROOT / "models.json"
+    mcp_url: str = os.getenv("MCP_URL", "http://127.0.0.1:8001/mcp")
+    # Empty string disables tracing. In Docker set PHOENIX_ENDPOINT=http://phoenix:6006/v1/traces
+    phoenix_endpoint: str = os.getenv("PHOENIX_ENDPOINT", "")
+    phoenix_project: str = os.getenv("PHOENIX_PROJECT", "nl-sql")
+    query_timeout_s: float = float(os.getenv("QUERY_TIMEOUT_S", "5"))
+    tool_row_limit: int = int(os.getenv("TOOL_ROW_LIMIT", "20"))
+    api_row_limit: int = int(os.getenv("API_ROW_LIMIT", "100"))
+    api_key: str = os.getenv("API_KEY", "")  # empty = auth disabled (dev only)
+    cors_origins: tuple = tuple(os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","))
+
+
+settings = Settings()
+
+
+================================================================================
+FILE: db/__init__.py
+================================================================================
+
+
+
+
+================================================================================
+FILE: db/executor.py
+================================================================================
+
+"""The ONE place SQL is executed. Shared by the MCP server, /sql, ingest, and evals.
+
+Defense in depth:
+  1. sqlglot parse: exactly one statement, root must be a query, no write/DDL nodes
+  2. connection opened mode=ro
+  3. sqlite authorizer: only SELECT / READ / FUNCTION / RECURSIVE actions allowed
+  4. progress handler: hard wall-clock timeout
+  5. row cap (fetch limit+1 to detect truncation)
+"""
+from __future__ import annotations
+
+import sqlite3
+import time
+from dataclasses import dataclass
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import ParseError
+
+
+class QueryRejected(ValueError):
+    """SQL failed validation (not a read-only single query)."""
+
+
+class QueryTimeout(RuntimeError):
+    """Query exceeded the time budget."""
+
+
+_FORBIDDEN_NAMES = ("Insert", "Update", "Delete", "Drop", "Create", "Alter",
+                    "Command", "Attach", "Pragma", "TruncateTable", "Merge")
+_FORBIDDEN = tuple(getattr(exp, n) for n in _FORBIDDEN_NAMES if hasattr(exp, n))
+
+_ALLOWED_ACTIONS = {
+    sqlite3.SQLITE_SELECT,
+    sqlite3.SQLITE_READ,
+    sqlite3.SQLITE_FUNCTION,
+    sqlite3.SQLITE_RECURSIVE,
+}
+
+
+def _authorizer(action, *_args):
+    return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
+
+
+def validate_sql(sql: str) -> str:
+    """Return cleaned SQL (no trailing semicolon) or raise QueryRejected."""
+    s = (sql or "").strip()
+    if not s:
+        raise QueryRejected("Empty SQL.")
+    try:
+        stmts = [t for t in sqlglot.parse(s, read="sqlite") if t is not None]
+    except ParseError as e:
+        raise QueryRejected(f"SQL parse error: {e}") from e
+    if len(stmts) != 1:
+        raise QueryRejected("Only a single statement is allowed.")
+    tree = stmts[0]
+    if not isinstance(tree, exp.Query):  # Select, Union, etc. (CTEs parse as Select)
+        raise QueryRejected("Only SELECT / WITH queries are allowed.")
+    if _FORBIDDEN and tree.find(*_FORBIDDEN):
+        raise QueryRejected("Write or DDL operations are not allowed.")
+    return s.rstrip(";").strip()
+
+
+@dataclass
+class QueryResult:
+    columns: list[str]
+    rows: list[tuple]
+    truncated: bool
+    elapsed_ms: float
+
+    def to_dict(self) -> dict:
+        return {"columns": self.columns, "rows": [list(r) for r in self.rows],
+                "truncated": self.truncated, "elapsed_ms": round(self.elapsed_ms, 1)}
+
+    def to_text(self) -> str:
+        note = f" (truncated to {len(self.rows)} rows)" if self.truncated else ""
+        return f"columns={self.columns} rows={self.rows}{note}"
+
+
+def connect_ro(db_path) -> sqlite3.Connection:
+    return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+
+
+def run_query(db_path, sql: str, limit: int = 100, timeout_s: float = 5.0) -> QueryResult:
+    clean = validate_sql(sql)
+    conn = connect_ro(db_path)
+    deadline = time.monotonic() + timeout_s
+    timed_out = False
+
+    def _progress():
+        nonlocal timed_out
+        if time.monotonic() > deadline:
+            timed_out = True
+            return 1  # non-zero aborts the query
+        return 0
+
+    start = time.perf_counter()
+    try:
+        conn.set_authorizer(_authorizer)
+        conn.set_progress_handler(_progress, 10_000)  # check every 10k VM steps
+        cur = conn.execute(clean)
+        fetched = cur.fetchmany(limit + 1)
+        cols = [c[0] for c in cur.description] if cur.description else []
+        return QueryResult(
+            columns=cols,
+            rows=fetched[:limit],
+            truncated=len(fetched) > limit,
+            elapsed_ms=(time.perf_counter() - start) * 1000,
+        )
+    except sqlite3.OperationalError as e:
+        if timed_out:
+            raise QueryTimeout(f"Query exceeded {timeout_s}s. Simplify it or add filters.") from e
+        raise
+    finally:
+        conn.close()
+
+
+================================================================================
+FILE: db/introspect.py
+================================================================================
+
+"""Deterministic profiling of a SQLite DB (no LLM). Produces a profile dict and a compact schema card."""
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+from .executor import connect_ro
+
+import re
+_DATE = re.compile(r"^\d{4}-\d{2}(-\d{2})?")
+
+def _q(name: str) -> str:
+    """Quote an identifier."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _clip(v, n: int = 60):
+    if isinstance(v, bytes):
+        return f"<{len(v)} bytes>"
+    if isinstance(v, str) and len(v) > n:
+        return v[:n] + "…"
+    return v
+
+
+def _profile_column(conn, table: str, col: str, ctype: str, max_distinct: int, top_k: int) -> dict:
+    t, c = _q(table), _q(col)
+    nulls, distinct, mn, mx = conn.execute(
+        f"SELECT SUM({c} IS NULL), COUNT(DISTINCT {c}), MIN({c}), MAX({c}) FROM {t}"
+    ).fetchone()
+    info = {"null_count": nulls or 0, "distinct_count": distinct, "min": _clip(mn), "max": _clip(mx)}
+    if distinct and distinct <= max_distinct:
+        vals = conn.execute(
+            f"SELECT {c}, COUNT(*) n FROM {t} WHERE {c} IS NOT NULL GROUP BY {c} ORDER BY n DESC"
+        ).fetchall()
+        info["values"] = [_clip(v[0]) for v in vals]
+    elif distinct and "INT" not in ctype.upper() and "REAL" not in ctype.upper() and not (isinstance(mn, str) and _DATE.match(mn)):
+        top = conn.execute(
+            f"SELECT {c}, COUNT(*) n FROM {t} WHERE {c} IS NOT NULL "
+            f"GROUP BY {c} ORDER BY n DESC LIMIT {top_k}"
+        ).fetchall()
+        info["top_values"] = [_clip(v[0]) for v in top]
+    return info
+
+
+def profile_db(db_path, sample_rows: int = 3, max_distinct: int = 15, top_k: int = 5) -> dict:
+    conn = connect_ro(db_path)
+    try:
+        objs = conn.execute(
+            "SELECT name, type FROM sqlite_master "
+            "WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        tables = {}
+        for name, typ in objs:
+            cols_raw = conn.execute(f"PRAGMA table_info({_q(name)})").fetchall()
+            fks = conn.execute(f"PRAGMA foreign_key_list({_q(name)})").fetchall()
+            n_rows = conn.execute(f"SELECT COUNT(*) FROM {_q(name)}").fetchone()[0]
+            columns = []
+            for _cid, cname, ctype, notnull, _dflt, pk in cols_raw:
+                col = {"name": cname, "type": ctype or "", "pk": bool(pk), "notnull": bool(notnull)}
+                if n_rows:
+                    try:
+                        col.update(_profile_column(conn, name, cname, ctype or "", max_distinct, top_k))
+                    except sqlite3.Error as e:
+                        col["profile_error"] = str(e)
+                columns.append(col)
+            sample = conn.execute(f"SELECT * FROM {_q(name)} LIMIT {sample_rows}").fetchall()
+            tables[name] = {
+                "type": typ,
+                "row_count": n_rows,
+                "columns": columns,
+                "foreign_keys": [
+                    {"from": fk[3], "to_table": fk[2], "to": fk[4]} for fk in fks
+                ],
+                "sample_rows": [[_clip(v) for v in row] for row in sample],
+            }
+        return {"db_file": Path(db_path).name, "tables": tables}
+    finally:
+        conn.close()
+
+
+def render_schema_card(profile: dict, with_samples: bool = True) -> str:
+    """Compact text the LLM reads. Far cheaper than indented JSON."""
+    out = []
+    for tname, t in profile["tables"].items():
+        out.append(f"## {tname} ({t['row_count']} rows)")
+        for c in t["columns"]:
+            line = f"- {c['name']} {c['type']}".rstrip()
+            if c["pk"]:
+                line += " PK"
+            hints = []
+            if c.get("values"):
+                hints.append("values: " + ", ".join(map(repr, c["values"])))
+            elif c.get("top_values"):
+                hints.append(f"{c['distinct_count']} distinct, e.g. " + ", ".join(map(repr, c["top_values"])))
+            elif c.get("min") is not None and c.get("distinct_count"):
+                hints.append(f"range {c['min']!r}..{c['max']!r}")
+            if c.get("null_count"):
+                hints.append(f"{c['null_count']} nulls")
+            if hints:
+                line += "  — " + "; ".join(hints)
+            out.append(line)
+        for fk in t["foreign_keys"]:
+            out.append(f"FK: {tname}.{fk['from']} -> {fk['to_table']}.{fk['to']}")
+        if with_samples and t["sample_rows"]:
+            out.append("sample: " + json.dumps(t["sample_rows"][0], default=str))
+        out.append("")
+    return "\n".join(out).strip()
+
+
+def save_profile(profile: dict, path) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(profile, indent=2, default=str), encoding="utf-8")
+
+
+================================================================================
+FILE: eval/__init__.py
+================================================================================
+
+
+
+
+================================================================================
+FILE: eval/metrics.py
+================================================================================
+
+"""Execution-accuracy helpers. Compare result sets, not SQL strings."""
+from __future__ import annotations
+
+
+def _norm(v):
+    if isinstance(v, float):
+        return round(v, 4)
+    if isinstance(v, str):
+        return v.strip()
+    return v
+
+
+def result_key(rows, ordered: bool = False):
+    norm = [tuple(_norm(v) for v in r) for r in rows]
+    return norm if ordered else sorted(norm, key=repr)
+
+
+def results_match(a, b, ordered: bool = False) -> bool:
+    return result_key(a, ordered) == result_key(b, ordered)
+
+
+================================================================================
+FILE: eval/runner.py
+================================================================================
+
+"""uv run python -m nlsql.eval.runner longlist --models groq-qwen,groq-gpt-oss --limit 20"""
+from __future__ import annotations
+
+import argparse, json, time
+from collections import defaultdict
+
+from .. import registry
+from ..agent.build import build_agent
+from ..db.executor import run_query
+from ..ingest import golden
+from ..llm.usage import UsageTracker
+from ..observability import setup_tracing, trace_context
+from .metrics import results_match
+
+
+def eval_model(db_id: str, model: str, items: list[dict]) -> dict:
+    path = registry.get(db_id)["path"]
+    agent, version = build_agent(db_id, model)
+    rows_out, by_cat = [], defaultdict(lambda: [0, 0])
+
+    for it in items:
+        t = UsageTracker()
+        ok, err, pred_sql = False, None, ""
+        try:
+            expected = run_query(path, it["sql"], limit=500, timeout_s=10)
+            with trace_context(db_id, model, version):
+                res = agent.invoke({"messages": [{"role": "user", "content": it["question"]}]},
+                                   config={"callbacks": [t], "recursion_limit": 25})
+            pred_sql = res["structured_response"].sql
+            got = run_query(path, pred_sql, limit=500, timeout_s=10)
+            ok = results_match(got.rows, expected.rows, ordered=it["category"] == "top_k")
+        except Exception as e:
+            err = f"{type(e).__name__}: {str(e)[:200]}"
+        s = t.summary()
+        by_cat[it["category"]][0] += ok
+        by_cat[it["category"]][1] += 1
+        rows_out.append({"id": it["id"], "category": it["category"], "correct": ok,
+                         "pred_sql": pred_sql, "error": err, **{k: s[k] for k in
+                         ("llm_calls", "tool_calls", "input_tokens", "output_tokens", "total_s")}})
+        print(f"  {model} {it['id']} {'OK ' if ok else 'BAD'} calls={s['llm_calls']} tok={s['input_tokens']} {s['total_s']}s")
+
+    n = len(rows_out)
+    return {
+        "model": model, "prompt_version": version, "n": n,
+        "accuracy": round(sum(r["correct"] for r in rows_out) / n, 3),
+        "avg_llm_calls": round(sum(r["llm_calls"] for r in rows_out) / n, 2),
+        "avg_input_tokens": round(sum(r["input_tokens"] for r in rows_out) / n),
+        "avg_latency_s": round(sum(r["total_s"] for r in rows_out) / n, 2),
+        "by_category": {c: f"{a}/{b}" for c, (a, b) in by_cat.items()},
+        "rows": rows_out,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("db_id")
+    ap.add_argument("--models", required=True)
+    ap.add_argument("--limit", type=int, default=0)
+    a = ap.parse_args()
+
+    setup_tracing()
+    items = golden.load(a.db_id, only_agreed=True)
+    if a.limit:
+        items = items[: a.limit]
+    reports = [eval_model(a.db_id, m, items) for m in a.models.split(",")]
+
+    out = registry.db_dir(a.db_id) / f"report.{int(time.time())}.json"
+    out.write_text(json.dumps(reports, indent=2), encoding="utf-8")
+    print(f"\n{'model':22} {'acc':>5} {'calls':>6} {'in_tok':>7} {'lat_s':>6}")
+    for r in reports:
+        print(f"{r['model']:22} {r['accuracy']:>5} {r['avg_llm_calls']:>6} {r['avg_input_tokens']:>7} {r['avg_latency_s']:>6}")
+        print("   ", r["by_category"])
+    print("report ->", out)
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FILE: ingest/__init__.py
+================================================================================
+
+
+
+
+================================================================================
+FILE: ingest/enrich.py
+================================================================================
+
+"""Big model writes descriptions, join paths and quirks. REVIEW data/<db_id>/enrichment.json before trusting it."""
+from __future__ import annotations
+
+import json
+
+from pydantic import BaseModel, Field
+
+from .. import registry
+from ..llm.factory import build_model
+from ..llm.structured import structured_call
+from .profile import load_card
+
+
+class ColumnDoc(BaseModel):
+    name: str
+    description: str
+
+
+class TableDoc(BaseModel):
+    name: str
+    description: str
+    columns: list[ColumnDoc] = Field(default_factory=list)
+
+
+class Enrichment(BaseModel):
+    db_description: str = Field(description="2-3 sentences: what this database contains and is good for.")
+    tables: list[TableDoc]
+    join_paths: list[str] = Field(description="Common joins, e.g. 'books.publisher_id = publishers.id'.")
+    quirks: list[str] = Field(description="Data gotchas grounded in the profile: name variants, units, nulls, derived columns.")
+
+
+SYSTEM = """You document a SQLite database for a text-to-SQL assistant.
+Use ONLY facts visible in the schema profile below. Do not invent columns, tables or values.
+Be concise. Flag redundancies (e.g. a column derivable from another) and ambiguous columns.
+
+SCHEMA PROFILE:
+{card}"""
+
+
+def run(db_id: str, model_nick: str) -> Enrichment:
+    llm = build_model(model_nick)
+    enr = structured_call(llm, Enrichment, SYSTEM.format(card=load_card(db_id)),
+                          "Produce the documentation.")
+    out = registry.db_dir(db_id) / "enrichment.json"
+    out.write_text(enr.model_dump_json(indent=2), encoding="utf-8")
+    return enr
+
+
+def load(db_id: str) -> Enrichment | None:
+    p = registry.db_dir(db_id) / "enrichment.json"
+    return Enrichment.model_validate_json(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def render(enr: Enrichment) -> str:
+    lines = [enr.db_description, ""]
+    for t in enr.tables:
+        lines.append(f"- {t.name}: {t.description}")
+        lines += [f"    - {c.name}: {c.description}" for c in t.columns]
+    if enr.join_paths:
+        lines += ["", "Join paths:"] + [f"- {j}" for j in enr.join_paths]
+    if enr.quirks:
+        lines += ["", "Notes:"] + [f"- {q}" for q in enr.quirks]
+    return "\n".join(lines)
+
+
+================================================================================
+FILE: ingest/golden.py
+================================================================================
+
+"""Generate golden question/SQL pairs with a big model, then validate:
+  1. SQL must execute, return rows, and not be truncated
+  2. an independent second pass (question only, no SQL shown) must produce the same result set
+status = 'agreed' or 'disputed'. Human review still matters: a wrong golden is worse than none."""
+from __future__ import annotations
+
+import json
+import math
+
+from pydantic import BaseModel
+
+from .. import registry
+from ..db.executor import run_query
+from ..eval.metrics import results_match
+from ..llm.factory import build_model
+from ..llm.structured import structured_call
+from . import enrich
+from .profile import load_card
+
+CATEGORIES = {
+    "simple_filter": "single-table filter or lookup",
+    "aggregate": "COUNT/SUM/AVG/MIN/MAX over one table",
+    "join": "requires joining 2 tables",
+    "group_by": "GROUP BY with aggregates, optionally HAVING",
+    "top_k": "ranking with ORDER BY ... LIMIT k",
+    "multi_join_agg": "3+ table join with aggregation",
+    "date_or_range": "date, year or numeric range conditions",
+}
+
+
+class GenItem(BaseModel):
+    question: str
+    sql: str
+
+
+class GenBatch(BaseModel):
+    items: list[GenItem]
+
+
+class SqlOnly(BaseModel):
+    sql: str
+
+
+GEN_SYS = """You create evaluation data for a text-to-SQL system over a SQLite database.
+Write realistic questions a curious non-technical user would ask, plus correct SQLite SQL.
+Rules: SQL must be a single SELECT/WITH; every question needs a deterministic, non-empty answer
+with fewer than 100 rows; use ORDER BY when order matters (and tie-breakers for top-k);
+use exact text values from the schema hints; vary phrasing and entities.
+
+{context}"""
+
+SOLVE_SYS = """Write one SQLite SELECT/WITH query answering the user's question. Use only the schema below.
+
+{context}"""
+
+
+def _try(path, sql, cap):
+    try:
+        return run_query(path, sql, limit=cap, timeout_s=10)
+    except Exception:
+        return None
+
+
+def _context(db_id: str) -> str:
+    ctx = "SCHEMA:\n" + load_card(db_id)
+    enr = enrich.load(db_id)
+    return ctx + ("\n\nDOCS:\n" + enrich.render(enr) if enr else "")
+
+
+def run(db_id: str, model_nick: str, n: int = 40, row_cap: int = 200) -> list[dict]:
+    path = registry.get(db_id)["path"]
+    llm = build_model(model_nick)
+    context = _context(db_id)
+    per = math.ceil(n / len(CATEGORIES))
+    seen, items, dropped = [], [], 0
+
+    for cat, desc in CATEGORIES.items():
+        user = (f"Category: {cat} ({desc}). Write {per} diverse questions.\n"
+                f"Already used, avoid similar: {seen[-30:]}")
+        batch = structured_call(llm, GenBatch, GEN_SYS.format(context=context), user)
+        for it in batch.items:
+            seen.append(it.question)
+            r = _try(path, it.sql, row_cap)
+            if r is None or not r.rows or r.truncated:
+                dropped += 1
+                continue
+            alt = structured_call(llm, SqlOnly, SOLVE_SYS.format(context=context), it.question)
+            r2 = _try(path, alt.sql, row_cap)
+            agreed = r2 is not None and results_match(r.rows, r2.rows)
+            items.append({
+                "id": f"{db_id}-{len(items) + 1:03d}",
+                "category": cat,
+                "question": it.question,
+                "sql": it.sql,
+                "expected_columns": r.columns,
+                "expected_rows": [list(x) for x in r.rows[:50]],
+                "n_rows": len(r.rows),
+                "status": "agreed" if agreed else "disputed",
+                "reviewed": False,
+            })
+        print(f"[golden] {cat}: kept so far {len(items)}, dropped {dropped}")
+
+    out = registry.db_dir(db_id) / "golden.jsonl"
+    out.write_text("\n".join(json.dumps(i, default=str) for i in items), encoding="utf-8")
+    agreed_n = sum(i["status"] == "agreed" for i in items)
+    print(f"[golden] wrote {len(items)} items ({agreed_n} agreed) -> {out}")
+    return items
+
+
+def load(db_id: str, only_agreed: bool = False) -> list[dict]:
+    p = registry.db_dir(db_id) / "golden.jsonl"
+    if not p.exists():
+        return []
+    rows = [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [r for r in rows if r["status"] == "agreed"] if only_agreed else rows
+
+
+================================================================================
+FILE: ingest/pipeline.py
+================================================================================
+
+"""CLI:  uv run python -m nlsql.ingest.pipeline longlist --path longlist.db --big-model groq-gpt-oss"""
+from __future__ import annotations
+
+import argparse
+
+from .. import registry
+from . import enrich, golden, profile, promptgen
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("db_id")
+    ap.add_argument("--path", help="SQLite file; registers/updates the db_id")
+    ap.add_argument("--desc", default="")
+    ap.add_argument("--big-model", help="nickname in models.json (needed for enrich/golden)")
+    ap.add_argument("--stages", default="profile,enrich,golden,prompt")
+    ap.add_argument("-n", type=int, default=40, help="target golden questions")
+    a = ap.parse_args()
+
+    if a.path:
+        registry.register(a.db_id, a.path, a.desc)
+    stages = a.stages.split(",")
+
+    if "profile" in stages:
+        p = profile.run(a.db_id)
+        print(f"[profile] {len(p['tables'])} tables")
+    if "enrich" in stages:
+        enrich.run(a.db_id, a.big_model)
+        print("[enrich] wrote enrichment.json (review it!)")
+    if "golden" in stages:
+        golden.run(a.db_id, a.big_model, n=a.n)
+    if "prompt" in stages:
+        promptgen.build(a.db_id)
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FILE: ingest/profile.py
+================================================================================
+
+from __future__ import annotations
+
+import json
+
+from .. import registry
+from ..db.introspect import profile_db, render_schema_card, save_profile
+
+
+def run(db_id: str) -> dict:
+    path = registry.get(db_id)["path"]
+    p = profile_db(path)
+    save_profile(p, registry.db_dir(db_id) / "profile.json")
+    return p
+
+
+def load_card(db_id: str, with_samples: bool = True) -> str:
+    p = json.loads((registry.db_dir(db_id) / "profile.json").read_text(encoding="utf-8"))
+    return render_schema_card(p, with_samples)
+
+
+================================================================================
+FILE: ingest/promptgen.py
+================================================================================
+
+"""Assemble the versioned system prompt: rules + schema card + docs + few-shot from golden."""
+from __future__ import annotations
+
+from itertools import zip_longest
+
+from .. import registry
+from . import enrich, golden
+from .profile import load_card
+
+RULES = """You answer questions about a SQLite database by writing SQL and running it with the query_database tool.
+
+Rules:
+- Use only the tables and columns listed below. Never invent columns.
+- Only SELECT/WITH queries, SQLite dialect.
+- Always run your SQL with query_database before answering. If it returns ERROR, fix the query and retry.
+- The tool returns at most 20 rows, so prefer aggregates and LIMIT over listing everything.
+- Match text values exactly as shown in the schema hints; use LIKE for partial names.
+- Base the answer ONLY on returned rows. If the schema cannot answer the question, say so."""
+
+
+def pick_examples(items: list[dict], k: int = 6) -> list[dict]:
+    """Round-robin across categories so examples are diverse."""
+    by_cat: dict[str, list[dict]] = {}
+    for it in items:
+        by_cat.setdefault(it["category"], []).append(it)
+    picked = []
+    for group in zip_longest(*by_cat.values()):
+        picked += [g for g in group if g]
+        if len(picked) >= k:
+            break
+    return picked[:k]
+
+
+def _next_version(d) -> int:
+    nums = [int(p.stem.split(".v")[1]) for p in d.glob("prompt.v*.md") if p.stem.split(".v")[1].isdigit()]
+    return max(nums, default=0) + 1
+
+
+def build(db_id: str, k_examples: int = 6) -> tuple[str, str]:
+    d = registry.db_dir(db_id)
+    parts = [RULES, "## Schema\n" + load_card(db_id)]
+    enr = enrich.load(db_id)
+    if enr:
+        parts.append("## Notes\n" + enrich.render(enr))
+    ex = pick_examples(golden.load(db_id, only_agreed=True), k_examples)
+    if ex:
+        parts.append("## Examples\n" + "\n\n".join(f"Q: {e['question']}\nSQL: {e['sql']}" for e in ex))
+    text = "\n\n".join(parts)
+    version = f"v{_next_version(d)}"
+    (d / f"prompt.{version}.md").write_text(text, encoding="utf-8")
+    print(f"[prompt] wrote prompt.{version}.md (~{len(text) // 4} tokens)")
+    return version, text
+
+
+def load_latest(db_id: str) -> tuple[str, str]:
+    d = registry.db_dir(db_id)
+    files = sorted(d.glob("prompt.v*.md"), key=lambda p: int(p.stem.split(".v")[1]))
+    if not files:
+        raise FileNotFoundError(f"No prompt for '{db_id}'. Run the ingest pipeline.")
+    return files[-1].stem.split(".")[1], files[-1].read_text(encoding="utf-8")
+
+
+================================================================================
+FILE: ingest/review.py
+================================================================================
+
+"""uv run python -m nlsql.ingest.review longlist   -> walk disputed/unreviewed items; y=keep, n=drop, s=skip"""
+import json, sys
+from .. import registry
+from . import golden
+
+
+def main(db_id: str):
+    items = golden.load(db_id)
+    keep = []
+    for it in items:
+        if it["status"] == "agreed" or it["reviewed"]:
+            keep.append(it); continue
+        print(f"\n[{it['id']}] {it['category']}\nQ: {it['question']}\nSQL: {it['sql']}")
+        print(f"rows({it['n_rows']}): {it['expected_rows'][:5]}")
+        c = input("keep as correct? [y/n/s] ").strip().lower()
+        if c == "y":
+            it["status"], it["reviewed"] = "agreed", True; keep.append(it)
+        elif c == "s":
+            keep.append(it)
+    out = registry.db_dir(db_id) / "golden.jsonl"
+    out.write_text("\n".join(json.dumps(i, default=str) for i in keep), encoding="utf-8")
+    print(f"saved {len(keep)} items")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
+
+
+================================================================================
+FILE: llm/__init__.py
+================================================================================
+
+
+
+
+================================================================================
+FILE: llm/factory.py
+================================================================================
+
+"""Build chat models from models.json nicknames, plus resilience middleware."""
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+
+from ..config import settings
+from .providers import PROVIDERS
+
+from langchain_core.rate_limiters import InMemoryRateLimiter
+
+
+class UnknownModel(KeyError):
+    pass
+
+
+@lru_cache(maxsize=1)
+def load_model_config() -> dict:
+    return json.loads(settings.models_file.read_text(encoding="utf-8"))
+
+
+def build_model(nickname: str | None = None):
+    cfg_all = load_model_config()
+    nickname = nickname or cfg_all["active"]
+    models = cfg_all["models"]
+    if nickname not in models:
+        raise UnknownModel(f"Unknown model '{nickname}'. Options: {list(models)}")
+    cfg = dict(models[nickname])
+    rpm = cfg.pop("rpm", None)
+    provider = cfg.pop("provider", None)
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unknown provider '{provider}'. Options: {list(PROVIDERS)}")
+
+    if rpm:
+        cfg["rate_limiter"] = InMemoryRateLimiter(
+            requests_per_second=rpm / 60, check_every_n_seconds=0.1, max_bucket_size=1
+        )
+    cfg.setdefault("max_retries", 6)
+    
+    return PROVIDERS[provider](**cfg)
+
+
+def build_middleware(fallbacks: list[str] | None = None, run_limit: int = 8, retries: int = 2) -> list:
+    """Retry w/ backoff, model fallback, and a hard cap on LLM calls per run.
+
+    These come from langchain.agents.middleware. Class names/args can shift between
+    versions, so check them against your installed version if import or init fails.
+    """
+    from langchain.agents.middleware import (
+        ModelCallLimitMiddleware,
+        ModelFallbackMiddleware,
+        ModelRetryMiddleware,
+    )
+
+    mw = [
+        ModelRetryMiddleware(max_retries=retries, backoff_factor=2.0, initial_delay=1.0, jitter=True),
+        ModelCallLimitMiddleware(run_limit=run_limit, exit_behavior="end"),
+    ]
+    if fallbacks:
+        mw.append(ModelFallbackMiddleware(*[build_model(n) for n in fallbacks]))
+    return mw
+
+
+================================================================================
+FILE: llm/providers.py
+================================================================================
+
+"""Provider factories. Imports are lazy so unused providers needn't be installed."""
+
+
+def _groq(**cfg):
+    from langchain_groq import ChatGroq
+    return ChatGroq(**cfg)
+
+
+def _nvidia(**cfg):
+    from langchain_nvidia_ai_endpoints import ChatNVIDIA
+    return ChatNVIDIA(**cfg)
+
+
+def _openrouter(**cfg):
+    from langchain_openrouter import ChatOpenRouter
+    return ChatOpenRouter(**cfg)
+
+
+PROVIDERS = {"groq": _groq, "nvidia": _nvidia, "openrouter": _openrouter}
+
+
+================================================================================
+FILE: llm/structured.py
+================================================================================
+
+"""Structured output with a JSON-parsing fallback (some providers/models are flaky at tool-based structure)."""
+from __future__ import annotations
+
+import json
+import re
+
+from pydantic import BaseModel
+
+
+def _extract_json(text: str) -> str:
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    return text[min(starts):] if starts else text
+
+
+def structured_call(llm, schema: type[BaseModel], system: str, user: str, retries: int = 2):
+    last = None
+    for _ in range(retries + 1):
+        try:
+            return llm.with_structured_output(schema).invoke([("system", system), ("user", user)])
+        except Exception as e:
+            last = e
+        try:
+            hint = "Respond with ONLY valid JSON matching this schema:\n" + json.dumps(schema.model_json_schema())
+            r = llm.invoke([("system", system + "\n\n" + hint), ("user", user)])
+            text = r.content if isinstance(r.content, str) else str(r.content)
+            return schema.model_validate_json(_extract_json(text))
+        except Exception as e:
+            last = e
+    raise RuntimeError(f"structured call failed: {type(last).__name__}: {last}")
+
+
+================================================================================
+FILE: llm/usage.py
+================================================================================
+
+"""Per-request token and latency capture via a LangChain callback."""
+from __future__ import annotations
+
+import threading
+import time
+
+from langchain_core.callbacks import BaseCallbackHandler
+
+
+class UsageTracker(BaseCallbackHandler):
+    def __init__(self):
+        self.llm_calls: list[dict] = []
+        self.tool_calls: list[dict] = []
+        self._starts: dict = {}
+        self._lock = threading.Lock()
+        self._t0 = time.perf_counter()
+
+    # --- LLM ---
+    def on_chat_model_start(self, serialized, messages, *, run_id, **kw):
+        self._starts[run_id] = time.perf_counter()
+
+    def on_llm_start(self, serialized, prompts, *, run_id, **kw):
+        self._starts[run_id] = time.perf_counter()
+
+    def on_llm_end(self, response, *, run_id, **kw):
+        dt = time.perf_counter() - self._starts.pop(run_id, time.perf_counter())
+        usage = {}
+        try:
+            usage = getattr(response.generations[0][0].message, "usage_metadata", None) or {}
+        except (IndexError, AttributeError):
+            pass
+        with self._lock:
+            self.llm_calls.append({
+                "latency_s": round(dt, 3),
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            })
+
+    # --- tools ---
+    def on_tool_start(self, serialized, input_str, *, run_id, **kw):
+        self._starts[run_id] = time.perf_counter()
+
+    def on_tool_end(self, output, *, run_id, **kw):
+        dt = time.perf_counter() - self._starts.pop(run_id, time.perf_counter())
+        with self._lock:
+            self.tool_calls.append({"latency_s": round(dt, 3)})
+
+    def summary(self) -> dict:
+        return {
+            "llm_calls": len(self.llm_calls),
+            "tool_calls": len(self.tool_calls),
+            "input_tokens": sum(c["input_tokens"] for c in self.llm_calls),
+            "output_tokens": sum(c["output_tokens"] for c in self.llm_calls),
+            "llm_latency_s": round(sum(c["latency_s"] for c in self.llm_calls), 3),
+            "tool_latency_s": round(sum(c["latency_s"] for c in self.tool_calls), 3),
+            "total_s": round(time.perf_counter() - self._t0, 3),
+            "per_call": self.llm_calls,
+        }
+
+
+================================================================================
+FILE: mcp_server.py
+================================================================================
+
+
+
+
+================================================================================
+FILE: observability.py
+================================================================================
+
+"""Phoenix tracing setup (idempotent) + per-request metadata so traces are filterable."""
+from __future__ import annotations
+
+from .config import settings
+
+_tracer_provider = None
+
+
+def setup_tracing():
+    global _tracer_provider
+    if _tracer_provider is not None or not settings.phoenix_endpoint:
+        return _tracer_provider
+    from openinference.instrumentation.langchain import LangChainInstrumentor
+    from phoenix.otel import register
+
+    _tracer_provider = register(
+        project_name=settings.phoenix_project,
+        endpoint=settings.phoenix_endpoint,
+    )
+    LangChainInstrumentor().instrument(tracer_provider=_tracer_provider)
+    return _tracer_provider
+
+
+def trace_context(db_id: str, model: str, prompt_version: str = "v0", session_id: str | None = None):
+    """Wrap agent.invoke in `with trace_context(...):` to tag every span."""
+    from openinference.instrumentation import using_attributes
+
+    return using_attributes(
+        session_id=session_id,
+        metadata={"db_id": db_id, "model": model, "prompt_version": prompt_version},
+        tags=[f"db:{db_id}", f"model:{model}"],
+        prompt_template_version=prompt_version,
+    )
+
+
+================================================================================
+FILE: registry.py
+================================================================================
+
+"""db_id -> path/description. Per-db artifacts live in data/<db_id>/."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from .config import settings
+
+REG = settings.data_dir / "registry.json"
+
+
+def _load() -> dict:
+    return json.loads(REG.read_text(encoding="utf-8")) if REG.exists() else {}
+
+
+def register(db_id: str, db_path, description: str = "") -> None:
+    reg = _load()
+    reg[db_id] = {"path": str(Path(db_path).resolve()), "description": description}
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    REG.write_text(json.dumps(reg, indent=2), encoding="utf-8")
+
+
+def get(db_id: str) -> dict:
+    reg = _load()
+    if db_id not in reg:
+        raise KeyError(f"Unknown db_id '{db_id}'. Registered: {list(reg)}")
+    return reg[db_id]
+
+
+def list_ids() -> list[str]:
+    return list(_load())
+
+
+def db_dir(db_id: str) -> Path:
+    d = settings.data_dir / db_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+DEFAULT_CFG = {"model": None, "fallbacks": [], "escalate_to": None, "run_limit": 8}
+
+
+def get_config(db_id: str) -> dict:
+    p = db_dir(db_id) / "config.json"
+    cfg = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    return {**DEFAULT_CFG, **cfg}
+
+
+def set_config(db_id: str, **kw) -> dict:
+    cfg = {**get_config(db_id), **kw}
+    (db_dir(db_id) / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return cfg
+
+
+def describe_all() -> dict[str, str]:
+    return {k: v.get("description", "") for k, v in _load().items()}
+
+

@@ -1,0 +1,78 @@
+[
+  {
+    "model": "groq-qwen",
+    "prompt_version": "v1",
+    "n": 2,
+    "accuracy": 0.0,
+    "avg_llm_calls": 0.0,
+    "avg_input_tokens": 0,
+    "avg_latency_s": 90.25,
+    "by_category": {
+      "simple_filter": "0/2"
+    },
+    "rows": [
+      {
+        "id": "longlist-001",
+        "category": "simple_filter",
+        "correct": false,
+        "pred_sql": "",
+        "error": "AttributeError: 'NoneType' object has no attribute 'sql'",
+        "llm_calls": 0,
+        "tool_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_s": 90.367
+      },
+      {
+        "id": "longlist-002",
+        "category": "simple_filter",
+        "correct": false,
+        "pred_sql": "",
+        "error": "AttributeError: 'NoneType' object has no attribute 'sql'",
+        "llm_calls": 0,
+        "tool_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_s": 90.13
+      }
+    ]
+  },
+  {
+    "model": "groq-gpt-oss-20b",
+    "prompt_version": "v1",
+    "n": 2,
+    "accuracy": 0.5,
+    "avg_llm_calls": 1.5,
+    "avg_input_tokens": 3292,
+    "avg_latency_s": 90.77,
+    "by_category": {
+      "simple_filter": "1/2"
+    },
+    "rows": [
+      {
+        "id": "longlist-001",
+        "category": "simple_filter",
+        "correct": true,
+        "pred_sql": "SELECT b.title FROM books b JOIN publishers p ON b.publisher_id = p.id WHERE p.publisher = 'Yale University Press' ORDER BY b.title;",
+        "error": null,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "input_tokens": 4414,
+        "output_tokens": 175,
+        "total_s": 61.012
+      },
+      {
+        "id": "longlist-002",
+        "category": "simple_filter",
+        "correct": false,
+        "pred_sql": "",
+        "error": "AttributeError: 'NoneType' object has no attribute 'sql'",
+        "llm_calls": 1,
+        "tool_calls": 1,
+        "input_tokens": 2169,
+        "output_tokens": 70,
+        "total_s": 120.533
+      }
+    ]
+  }
+]
